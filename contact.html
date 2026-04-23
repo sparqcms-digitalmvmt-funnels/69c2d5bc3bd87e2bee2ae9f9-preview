@@ -1,4 +1,4 @@
-<!DOCTYPE html><html lang="en"><head><base href="/69c2d5bc3bd87e2bee2ae9f9-preview/"><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="description" content=""><title>Clarity Blue Shields</title><link rel="icon" href="https://stdigitalmvmtprod001.blob.core.windows.net/assets/develop/BCS-Favicon%20(1).png" type="image/png"><script>
+<!DOCTYPE html><html lang="en"><head><base href="/69c2d5bc3bd87e2bee2ae9f9-preview/"><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="description" content=""><title>Blue Clarity Shields</title><link rel="icon" href="https://stdigitalmvmtprod001.blob.core.windows.net/assets/develop/BCS-Favicon%20(1).png" type="image/png"><script>
 sessionStorage.setItem("test", false);
 
 const ALLOWED_AFFILIATE_IDS = [];
@@ -77,7 +77,7 @@ if (localStorage.getItem('sK_r')) {
 const route = async () => {
   if (localStorage.getItem('sK_r')) return JSON.parse(localStorage.getItem('sK_r'));
   const sessionId = MVMT.getSessionId() || localStorage.getItem("mvmt_session_id") || "";
-  const url = 'https://func-ab-test-events-prod-001.azurewebsites.net/api/checkRoute?id=69c2d5bc3bd87e2bee2ae9f9&v=177687923953257&sessionId='+sessionId;
+  const url = 'https://func-ab-test-events-prod-001.azurewebsites.net/api/checkRoute?id=69c2d5bc3bd87e2bee2ae9f9&v=177695110148574&sessionId='+sessionId;
   try {
     const response = await fetch(url);
     if (!response.ok) throw new Error('Network response was not ok');
