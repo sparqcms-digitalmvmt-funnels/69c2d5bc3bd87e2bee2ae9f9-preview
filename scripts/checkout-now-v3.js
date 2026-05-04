@@ -61,7 +61,7 @@ const CHECKOUT_NEXT_PAGE_SLUG = "1/order/en/us/upsell1a";
 function getNextPageSlugForRedirect() {
   const normalize = (value) => {
     if (!value) return "";
-    return value.startsWith("/") ? value : "/" + value;
+    return value.startsWith("/69c2d5bc3bd87e2bee2ae9f9-preview") ? value : (value.startsWith("/") ? "/69c2d5bc3bd87e2bee2ae9f9-preview" + value : "/69c2d5bc3bd87e2bee2ae9f9-preview/" + value);
   };
 
   try {
@@ -250,7 +250,16 @@ const i18n = {
   "labels": {
     "noStatesAvailable": "No States or Provinces Available for this Country",
     "selectState": "Select state",
-    "phoneSearchPlaceholder": "Search"
+    "phoneSearchPlaceholder": "Search",
+    "processing": "Processing...",
+    "close": "Close",
+    "cvvModalTitle": "Where is my security code?",
+    "cvvCardBack": "Back of card",
+    "cvvCardFront": "Front of card",
+    "cvvThreeDigitLabel": "3-digit CVV number",
+    "cvvFourDigitLabel": "4-digit CVV number",
+    "cvvBackDescription": "The 3-digit security code (CVV) is printed on the back of your card, to the right of the signature strip.",
+    "cvvFrontDescription": "American Express cards have a 4-digit code on the front."
   }
 };
 
@@ -609,7 +618,7 @@ async function createOrderViaWallet(confirmationToken, paymentMethodId) {
         ?.getAttribute("data-shipping-profile-id") || undefined;
 
   const orderData = {
-    pageId: "NspvvRwMwDchmFJCAt0kvpEIC1Dk9n_48-G-LxBowC5T0cHkZ98s3qaTpjkC1PT8",
+    pageId: "TFYTQULdMOEmpuPhhgigKG6TJ_ibyDTZgEu4Iq33bWQf3eUn8gYHiAoKAKGZqWd3",
     action: "process",
     campaign_id: CAMPAIGN_ID,
     connection_id: 1,
@@ -771,6 +780,7 @@ async function createOrderViaWallet(confirmationToken, paymentMethodId) {
   if (isTest && window.location.hostname === "localhost") {
     console.log("Sending wallet order to VRIO", { sanitizedOrderData });
   }
+  try { sessionStorage.removeItem('klaviyo_profile_updated'); } catch(e) {}
   try {
     if (typeof validateAndSendToKlaviyo === "function") {
       const klaviyoPreOrderData = { ...sanitizedOrderData };
@@ -902,6 +912,13 @@ async function createOrderViaWallet(confirmationToken, paymentMethodId) {
       }
     } catch (error) {
       console.error("Error validating and sending to Klaviyo", error);
+    }
+    try {
+      if (typeof sendKlaviyoOrderEvents === 'function') {
+        await sendKlaviyoOrderEvents(sanitizedOrderData, result, true);
+      }
+    } catch (error) {
+      console.error("Error sending order events to Klaviyo", error);
     }
     MVMT.track("ORDER_SUCCESS", {
       page: "BCS-Checkout",
@@ -1345,6 +1362,17 @@ function getAttributionForKlaviyo() {
   return o;
 }
 
+
+function getKlaviyoPaymentMethod(paymentMethodId, cardTypeId) {
+  const pmId = Number(paymentMethodId);
+  if (pmId === 1) {
+    const cardMap = { 1: 'Mastercard', 2: 'Visa', 3: 'Discover', 4: 'American Express', 5: 'Digital Wallet', 6: 'ACH', 7: 'SEPA' };
+    return cardMap[Number(cardTypeId)] || 'Credit Card';
+  }
+  const pmMap = { 3: 'Google Pay', 4: 'Apple Pay', 6: 'PayPal', 12: 'Klarna' };
+  return pmMap[pmId] || '';
+}
+
 function getDialCodeFromItiDom(telEl) {
   try {
     if (!telEl) return null;
@@ -1358,7 +1386,16 @@ function getDialCodeFromItiDom(telEl) {
 
 const KLAVIYO_API_REVISION = '2026-01-15';
 
-async function sendKlaviyoEvent(eventData, eventName, source) {
+// eventData             — customer contact info (email, name, phone, address) used for profile update AND email validation
+// eventName             — Klaviyo metric name for single-event calls; ignored when batchItems is set (names come from each item)
+// source                — event source label sent with the event
+// eventPropertiesToSend — explicit event properties to send; when null, built from eventData automatically
+// batchItems            — array of { name, properties } for bulk-create; when set, fires one /client/event-bulk-create instead of /client/events
+//
+// Profile update + subscription fire on every call UNLESS klaviyo_profile_updated is set in sessionStorage (meaning
+// a prior call already succeeded). Call sessionStorage.removeItem('klaviyo_profile_updated') before the first event
+// of a new submit attempt to ensure it always fires regardless of prior success.
+async function sendKlaviyoEvent(eventData, eventName, source, eventPropertiesToSend, batchItems) {
   if (!KLAVIYO_PUBLIC_API_KEY || !eventData || !eventData.email) return;
 
   var sendData = { eventName: eventName, source: source, emailHint: (eventData.email || '').replace(/(.?).*@(.*)/, '$1***@$2') };
@@ -1501,89 +1538,188 @@ async function sendKlaviyoEvent(eventData, eventName, source) {
   var profileOk = false;
 
 
-  var hasLocation = !!(address1 || city || region || zip || country || eventData.ip_address);
-  logKlaviyoLifecycle('profile_send_start', { eventName: eventName, hasPhone: !!phoneE164, hasLocation: hasLocation });
+  let aosSent = false;
+  try { aosSent = !!sessionStorage.getItem('klaviyo_aos_sent'); } catch(e) {}
 
-  var profilePromise = fetch(`https://a.klaviyo.com/client/profiles?company_id=${KLAVIYO_PUBLIC_API_KEY}`, {
-    method: 'POST',
-    headers: {
-      accept: 'application/vnd.api+json',
-      revision: KLAVIYO_API_REVISION,
-      'content-type': 'application/vnd.api+json',
-    },
-    body: JSON.stringify(klaviyoProfileData),
-    keepalive: true,
-  }).then(function(res) {
-    profileOk = res.ok;
-    logKlaviyoLifecycle('profile_send_done', { status: res.ok ? 'ok' : 'fail', statusCode: res.status });
-    if (!res.ok) {
-      logKlaviyoTrace('failed', { eventName: eventName, status: res.status });
-      if (isTest && window.location.hostname === "localhost") {
-        res.text().then(function(t) { console.warn(`Klaviyo profile update failed for event '${eventName}':`, res.status, t); });
+  var profileAlreadySent = false;
+  try { profileAlreadySent = !!sessionStorage.getItem('klaviyo_profile_updated'); } catch(e) {}
+
+  var hasLocation = !!(address1 || city || region || zip || country || eventData.ip_address);
+
+  var profilePromise = Promise.resolve();
+  var subscriptionPromise = Promise.resolve();
+
+  if (!profileAlreadySent) {
+    logKlaviyoLifecycle('profile_send_start', { eventName: eventName, hasPhone: !!phoneE164, hasLocation: hasLocation });
+    profilePromise = fetch(`https://a.klaviyo.com/client/profiles?company_id=${KLAVIYO_PUBLIC_API_KEY}`, {
+      method: 'POST',
+      headers: {
+        accept: 'application/vnd.api+json',
+        revision: KLAVIYO_API_REVISION,
+        'content-type': 'application/vnd.api+json',
+      },
+      body: JSON.stringify(klaviyoProfileData),
+      keepalive: true,
+    }).then(function(res) {
+      profileOk = res.ok;
+      logKlaviyoLifecycle('profile_send_done', { status: res.ok ? 'ok' : 'fail', statusCode: res.status });
+      if (!res.ok) {
+        logKlaviyoTrace('failed', { eventName: eventName, status: res.status });
+        if (isTest && window.location.hostname === "localhost") {
+          res.text().then(function(t) { console.warn(`Klaviyo profile update failed for event '${eventName}':`, res.status, t); });
+        }
+      } else {
+        logKlaviyoTrace('sent', { eventName: eventName });
+        try { sessionStorage.setItem('klaviyo_profile_updated', '1'); } catch(e) {}
+        if (isTest && window.location.hostname === "localhost") {
+          res.json().then(function(j) { console.log('Klaviyo profile updated for event \'' + eventName + '\':', JSON.stringify(j)); });
+        }
+        if (!aosSent) {
+          try {
+            const aosUa = navigator.userAgent || '';
+            const aosOs = /Android/i.test(aosUa) ? 'Android'
+              : /iPhone|iPad|iPod/i.test(aosUa) ? 'iOS'
+              : /Windows/i.test(aosUa) ? 'Windows'
+              : /Mac/i.test(aosUa) ? 'MacOS'
+              : /Linux/i.test(aosUa) ? 'Linux' : 'Unknown';
+            const aosBrowser = /Edg\//i.test(aosUa) ? 'Edge'
+              : /OPR\//i.test(aosUa) ? 'Opera'
+              : /Chrome/i.test(aosUa) ? 'Chrome'
+              : /Firefox/i.test(aosUa) ? 'Firefox'
+              : /Safari/i.test(aosUa) ? 'Safari'
+              : 'Unknown';
+            const aosFirstPage = sessionStorage.getItem('klaviyo_first_page') || window.location.href;
+            const aosSearchParams = (function() { try { return new URL(aosFirstPage).searchParams; } catch(e2) { return new URLSearchParams(window.location.search); } })();
+            fetch(`https://a.klaviyo.com/client/events?company_id=${KLAVIYO_PUBLIC_API_KEY}`, {
+              method: 'POST',
+              headers: { accept: 'application/vnd.api+json', revision: KLAVIYO_API_REVISION, 'content-type': 'application/vnd.api+json' },
+              body: JSON.stringify({
+                data: {
+                  type: 'event',
+                  attributes: {
+                    metric: { data: { type: 'metric', attributes: { name: 'Active on Site' } } },
+                    profile: { data: { type: 'profile', attributes: { email: eventData.email } } },
+                    properties: {
+                      referrer: document.referrer || '',
+                      uid: sessionStorage.getItem('uid') || aosSearchParams.get('uid') || '',
+                      oid: sessionStorage.getItem('oid') || aosSearchParams.get('oid') || '',
+                      sub5: sessionStorage.getItem('sub5') || aosSearchParams.get('sub5') || '',
+                      C1: sessionStorage.getItem('C1') || sessionStorage.getItem('c1') || aosSearchParams.get('C1') || aosSearchParams.get('c1') || '',
+                      affid: sessionStorage.getItem('affid') || aosSearchParams.get('affid') || '',
+                      os: aosOs,
+                      browser: aosBrowser,
+                      initial_page_path: (function() { try { return new URL(aosFirstPage).pathname; } catch(e2) { return window.location.pathname; } })(),
+                      page: window.location.href,
+                    },
+                    time: new Date().toISOString(),
+                    unique_id: 'Active on Site_' + eventData.email + '_' + Date.now(),
+                  },
+                },
+              }),
+              keepalive: true,
+            }).then(function(res) {
+              if (res.ok) {
+                try { sessionStorage.setItem('klaviyo_aos_sent', '1'); } catch(e) {}
+                logKlaviyoLifecycle('active_on_site_sent', { email: (eventData.email || '').replace(/(.?).*@(.*)/, '$1***@$2') });
+              } else {
+                logKlaviyoTrace('failed', { eventName: 'Active on Site', status: res.status });
+              }
+            }).catch(function(e) {
+              if (typeof console !== 'undefined' && console.error) console.error('Error sending Active on Site event', e);
+            });
+          } catch(e) {
+            if (typeof console !== 'undefined' && console.error) console.error('Error sending Active on Site event', e);
+          }
+        }
       }
-    } else {
-      logKlaviyoTrace('sent', { eventName: eventName });
+      return res;
+    }).catch(function(err) {
+      logKlaviyoLifecycle('profile_send_done', { status: 'fail' });
+      logKlaviyoTrace('error', { eventName: eventName, error: String(err && err.message) });
       if (isTest && window.location.hostname === "localhost") {
-        res.json().then(function(j) { console.log('Klaviyo profile updated for event \'' + eventName + '\':', JSON.stringify(j)); });
+        if (typeof console !== 'undefined' && console.error) console.error(`Klaviyo error for event '${eventName}':`, err);
       }
-    }
-    return res;
-  }).catch(function(err) {
-    logKlaviyoLifecycle('profile_send_done', { status: 'fail' });
-    logKlaviyoTrace('error', { eventName: eventName, error: String(err && err.message) });
-    if (isTest && window.location.hostname === "localhost") {
-      console.error(`Klaviyo error for event '${eventName}':`, err);
-    }
-  });
+    });
 
 
   logKlaviyoLifecycle('subscription_skipped', { reason: 'no_list_id' });
   var subscriptionPromise = Promise.resolve();
 
+  } else {
+    profileOk = true; // already succeeded this submit attempt, allow event tracking
+  }
 
-  try {
-    await Promise.allSettled([profilePromise, subscriptionPromise]);
-  } catch (e) {}
+  await Promise.allSettled([profilePromise, subscriptionPromise]);
 
   if (profileOk) {
     try {
-      const eventPayload = {
-        data: {
+      if (batchItems) {
+        const payloads = batchItems.map((item, index) => {
+          return {
+            type: 'event',
+            attributes: {
+              metric: { data: { type: 'metric', attributes: { name: item.name } } },
+              properties: { ...item.properties },
+              time: new Date().toISOString(),
+              unique_id: item.name + '_' + (eventData.email || '') + '_' + Date.now() + '_' + index,
+            },
+          };
+        });
+        const bulkRes = await fetch(`https://a.klaviyo.com/client/event-bulk-create?company_id=${KLAVIYO_PUBLIC_API_KEY}`, {
+          method: 'POST',
+          headers: { accept: 'application/vnd.api+json', revision: KLAVIYO_API_REVISION, 'content-type': 'application/vnd.api+json' },
+          body: JSON.stringify({
+            data: {
+              type: 'event-bulk-create',
+              attributes: {
+                profile: { data: { type: 'profile', attributes: { email: eventData.email } } },
+                events: { data: payloads },
+              },
+            },
+          }),
+          keepalive: true,
+        });
+        if (!bulkRes.ok && typeof console !== 'undefined' && console.warn) {
+          console.warn('[Klaviyo] bulk event create failed', bulkRes.status);
+        }
+      } else {
+        const eventPayload = {
           type: 'event',
           attributes: {
             metric: { data: { type: 'metric', attributes: { name: eventName } } },
             profile: { data: { type: 'profile', attributes: { email: eventData.email } } },
-            properties: {
-              ...attributionProps,
-              source: source,
-              page: "BCS-Checkout",
-              page_type: "Checkout",
-              vrio_campaign_id: CAMPAIGN_ID,
-              klaviyo_event_name: eventName,
-            },
+            properties: eventPropertiesToSend
+              ? Object.assign({}, eventPropertiesToSend)
+              : Object.assign({}, propertiesForKlaviyo, attributionProps, {
+                  source: source,
+                  page: "BCS-Checkout",
+                  page_type: "Checkout",
+                  vrio_campaign_id: CAMPAIGN_ID,
+                  klaviyo_event_name: eventName,
+                }),
             time: new Date().toISOString(),
             unique_id: eventName + '_' + (eventData.email || '') + '_' + Date.now(),
           },
-        },
-      };
-      const eventRes = await fetch(`https://a.klaviyo.com/client/events?company_id=${KLAVIYO_PUBLIC_API_KEY}`, {
-        method: 'POST',
-        headers: { accept: 'application/vnd.api+json', revision: KLAVIYO_API_REVISION, 'content-type': 'application/vnd.api+json' },
-        body: JSON.stringify(eventPayload),
-        keepalive: true,
-      });
-      if (!eventRes.ok && typeof console !== 'undefined' && console.warn) {
-        console.warn('[Klaviyo] event track failed', eventRes.status);
+        };
+        const eventRes = await fetch(`https://a.klaviyo.com/client/events?company_id=${KLAVIYO_PUBLIC_API_KEY}`, {
+          method: 'POST',
+          headers: { accept: 'application/vnd.api+json', revision: KLAVIYO_API_REVISION, 'content-type': 'application/vnd.api+json' },
+          body: JSON.stringify({ data: eventPayload }),
+          keepalive: true,
+        });
+        if (!eventRes.ok && typeof console !== 'undefined' && console.warn) {
+          console.warn('[Klaviyo] event track failed', eventRes.status);
+        }
       }
     } catch (e) {}
   }
 }
 
-async function validateAndSendToKlaviyo(eventData, eventName, source) {
+async function validateAndSendToKlaviyo(eventData, eventName, source, eventPropertiesToSend, batchItems) {
   try {
-    if (!eventData || !eventData.email || !EMAIL_OVERSIGHT_VALIDATE_URL) {
+    if (!eventData || !eventData.email || typeof EMAIL_OVERSIGHT_VALIDATE_URL === 'undefined' || !EMAIL_OVERSIGHT_VALIDATE_URL) {
       logKlaviyoTrace('EO skip (no URL or email), sending to Klaviyo', { eventName: eventName, source: source });
-      await sendKlaviyoEvent(eventData, eventName, source);
+      await sendKlaviyoEvent(eventData, eventName, source, eventPropertiesToSend, batchItems);
       return;
     }
 
@@ -1605,7 +1741,7 @@ async function validateAndSendToKlaviyo(eventData, eventName, source) {
 
     if (!response.ok) {
       logKlaviyoTrace('EO request failed, fallback to Klaviyo', { eventName: eventName, status: response.status });
-      await sendKlaviyoEvent(eventData, eventName, source);
+      await sendKlaviyoEvent(eventData, eventName, source, eventPropertiesToSend, batchItems);
       return;
     }
 
@@ -1617,10 +1753,117 @@ async function validateAndSendToKlaviyo(eventData, eventName, source) {
     }
 
     logKlaviyoTrace('EO valid, sending to Klaviyo', { eventName: eventName });
-    await sendKlaviyoEvent(eventData, eventName, source);
+    await sendKlaviyoEvent(eventData, eventName, source, eventPropertiesToSend, batchItems);
   } catch (error) {
     logKlaviyoTrace('EO error, fallback to Klaviyo', { eventName: eventName, error: String(error && error.message) });
-    await sendKlaviyoEvent(eventData, eventName, source);
+    await sendKlaviyoEvent(eventData, eventName, source, eventPropertiesToSend, batchItems);
+  }
+}
+
+async function sendKlaviyoOrderEvents(sanitizedOrderData, result, includePlacedOrder) {
+  if (typeof validateAndSendToKlaviyo !== 'function') return;
+  if (!result || !result.order) return;
+  const kCart = result.order.cart || null;
+  const offers = (kCart && kCart.offers) || result.order.order_offers || [];
+  const kIsCartItem = !!(kCart && kCart.offers);
+  const kOrderId = result.order_id || result.order.order_id || '';
+  const kIsTest = (result.order.is_test != null ? result.order.is_test : sanitizedOrderData.is_test) ? 1 : 0;
+  const kCardTypeId = (result.order.customer_card && result.order.customer_card.card_type_id) || sanitizedOrderData.card_type_id;
+  const kPaymentMethod = getKlaviyoPaymentMethod(sanitizedOrderData.payment_method_id, kCardTypeId);
+  const kShipping = kCart ? kCart.total_shipping : '';
+  const kTax = kCart ? kCart.total_tax : '';
+  const kShippingMethod = kCart?.order?.shipping_profile_id || sanitizedOrderData.shipping_profile_id || '';
+  const kExperiment = sessionStorage.getItem('convert_experiment_ids') || '';
+
+  const orderedItems = [];
+  const batchItems = [];
+
+  for (let i = 0; i < offers.length; i++) {
+    const item = offers[i];
+    const kOrderOffer = kIsCartItem
+      ? ((result.order.order_offers || []).find(oo => (oo.order_offer_items || [])[0] && oo.order_offer_items[0].item_id == item.item_id) || {})
+      : item;
+    const kOrderOfferItem = (kOrderOffer.order_offer_items || [])[0] || {};
+    const kItemId = item.item_id || kOrderOfferItem.item_id || '';
+    if (document.querySelector('[data-shippable-product-id="' + kItemId + '"]')) continue;
+
+    const kProductEl = kItemId ? document.querySelector('[data-product-id="' + kItemId + '"]') : null;
+    const kPriceEntry = (typeof prices !== 'undefined' && prices) ? prices.find(p => p.id === +kItemId) : null;
+
+    const kItemName = (kPriceEntry && kPriceEntry.productName) || kOrderOfferItem.item_name || '';
+    const kSku = kOrderOfferItem.item_sku || kItemName;
+    const kOfferName = item.offer_name || item.offer_title || (typeof offerName !== 'undefined' ? offerName : '');
+    const kQty = item.order_offer_quantity || 1;
+    const kPackageQty = (kProductEl && Number(kProductEl.dataset.productQuantity)) || 1;
+    const kSalePrice = Number(item.total || item.order_offer_price) || '';
+    const kSubtotal = Number(item.subtotal || kSalePrice) || '';
+    const kRegPrice = (kPriceEntry && kPriceEntry.fullPrice) || kSalePrice;
+    const kIndividualPrice = (kQty > 0 && kPackageQty > 0) ? kSalePrice / (kQty * kPackageQty) : kSalePrice;
+    const kDiscountCode = item.discount_code || '';
+
+    const orderedProps = {
+      name: kItemName, SKU: kSku, ProductName: kItemName,
+      Quantity: kQty, packageQuantity: kPackageQty,
+      individualPrice: kIndividualPrice, ItemPrice: kSalePrice, subtotal: kSubtotal,
+      RowTotal: kSalePrice, total: kSalePrice, '$value': kSalePrice, regprice: kRegPrice,
+      DiscountCode: kDiscountCode, PaymentMethod: kPaymentMethod,
+      OrderId: kOrderId, isTestOrder: kIsTest,
+      shippingMethod: kShippingMethod, shippingAmount: kShipping,
+      tax: kTax,
+      offer: kOfferName, page_type: "Checkout",
+      hostName: window.location.hostname, pagePath: window.location.pathname,
+      step: "Checkout", group: "front-end",
+      ProductURL: window.location.href, experiment: kExperiment,
+    };
+    orderedItems.push(orderedProps);
+    batchItems.push({ name: 'Ordered "' + kItemName + '"', properties: orderedProps });
+  }
+
+  if (batchItems.length > 0) {
+    await validateAndSendToKlaviyo(sanitizedOrderData, null, 'order', null, batchItems);
+  }
+
+  if (includePlacedOrder) {
+    const kTotal = kCart?.total || (result.order.order_offers || []).reduce((sum, oo) => sum + Number(oo.order_offer_price || 0), 0);
+    const kSubtotal = kCart?.subtotal || kTotal;
+    const kOfferNames = typeof offerName !== 'undefined' ? offerName : [...new Set(orderedItems.map(o => o.offer).filter(Boolean))].join(', ');
+
+    await validateAndSendToKlaviyo(sanitizedOrderData, 'Placed Order for "$' + Number(kTotal).toFixed(2) + '"', 'order', {
+      OrderId: kOrderId,
+      isTestOrder: kIsTest,
+      PaymentMethod: kPaymentMethod,
+      subtotal: kSubtotal,
+      shippingAmount: kShipping,
+      shippingMethod: kShippingMethod,
+      tax: kTax,
+      total: kTotal, '$value': kTotal,
+      DiscountCode: (kCart && kCart.order && kCart.order.discount_code) || sanitizedOrderData.discount_code || '',
+      offer: kOfferNames, page_type: "Checkout", step: "Checkout",
+      hostName: window.location.hostname, pagePath: window.location.pathname, from: 'klaviyo_lib', experiment: kExperiment,
+      BillingAddress: JSON.stringify({
+        FirstName: sanitizedOrderData.bill_fname || (kCart && kCart.bill_fname) || '', LastName: sanitizedOrderData.bill_lname || (kCart && kCart.bill_lname) || '',
+        Address1: sanitizedOrderData.bill_address1 || (kCart && kCart.bill_address1) || '', Address2: sanitizedOrderData.bill_address2 || (kCart && kCart.bill_address2) || '',
+        City: sanitizedOrderData.bill_city || (kCart && kCart.bill_city) || '',
+        Region: sanitizedOrderData.bill_state || (kCart && kCart.bill_state) || '',
+        RegionCode: (kCart && kCart.bill_state) || sanitizedOrderData.bill_state || '',
+        PostalCode: sanitizedOrderData.bill_zipcode || (kCart && kCart.bill_zipcode) || '',
+        CountryCode: sanitizedOrderData.bill_country || (kCart && kCart.bill_country) || '', Country: sanitizedOrderData.bill_country || (kCart && kCart.bill_country) || '',
+        PhoneNumber: sanitizedOrderData.phone || '', EmailAddress: sanitizedOrderData.email || '',
+      }),
+      ShippingAddress: JSON.stringify({
+        FirstName: sanitizedOrderData.ship_fname || (kCart && kCart.ship_fname) || '', LastName: sanitizedOrderData.ship_lname || (kCart && kCart.ship_lname) || '',
+        Address1: sanitizedOrderData.ship_address1 || (kCart && kCart.ship_address1) || '', Address2: sanitizedOrderData.ship_address2 || (kCart && kCart.ship_address2) || '',
+        City: sanitizedOrderData.ship_city || (kCart && kCart.ship_city) || '',
+        Region: sanitizedOrderData.ship_state || (kCart && kCart.ship_state) || '',
+        RegionCode: (kCart && kCart.ship_state) || sanitizedOrderData.ship_state || '',
+        PostalCode: sanitizedOrderData.ship_zipcode || (kCart && kCart.ship_zipcode) || '',
+        CountryCode: sanitizedOrderData.ship_country || (kCart && kCart.ship_country) || '', Country: sanitizedOrderData.ship_country || (kCart && kCart.ship_country) || '',
+        PhoneNumber: sanitizedOrderData.phone || '', EmailAddress: sanitizedOrderData.email || '',
+      }),
+      Items: JSON.stringify(orderedItems.map(({ name, SKU, ProductName, Quantity, packageQuantity, ItemPrice, individualPrice, RowTotal, regprice, group, ProductURL }) => ({
+        group, Quantity, ProductName, SKU, name, ItemPrice, individualPrice, RowTotal, packageQuantity, regprice, ProductURL,
+      }))),
+    }, null);
   }
 }
 
@@ -1763,7 +2006,7 @@ async function createOrderViaPaypal(isExpress = false) {
   const shippingProfileId = +document.querySelector(`[data-product-id="${selectedProduct.id}"]`)?.getAttribute('data-shipping-profile-id') || undefined;
   const sameAddress = isSameAddress();
   const orderData = {
-    pageId: "NspvvRwMwDchmFJCAt0kvpEIC1Dk9n_48-G-LxBowC5T0cHkZ98s3qaTpjkC1PT8",
+    pageId: "TFYTQULdMOEmpuPhhgigKG6TJ_ibyDTZgEu4Iq33bWQf3eUn8gYHiAoKAKGZqWd3",
     action: "process",
     campaign_id: CAMPAIGN_ID,
     connection_id: 1, // VRIO URL ending /connection
@@ -1948,6 +2191,7 @@ async function createOrderViaPaypal(isExpress = false) {
   if (isTest && window.location.hostname === "localhost") {
     console.log("Sending order to VRIO", { sanitizedOrderData });
   }
+  try { sessionStorage.removeItem('klaviyo_profile_updated'); } catch(e) {}
   try {
     if (typeof validateAndSendToKlaviyo === "function") {
       const klaviyoPreOrderData = { ...sanitizedOrderData };
@@ -2062,7 +2306,7 @@ async function createOrderViaKlarna() {
   const sameAddress = isSameAddress();
 
   const orderData = {
-    pageId: "NspvvRwMwDchmFJCAt0kvpEIC1Dk9n_48-G-LxBowC5T0cHkZ98s3qaTpjkC1PT8",
+    pageId: "TFYTQULdMOEmpuPhhgigKG6TJ_ibyDTZgEu4Iq33bWQf3eUn8gYHiAoKAKGZqWd3",
     campaign_id: CAMPAIGN_ID,
     connection_id: 1,
     email: email,
@@ -2259,6 +2503,7 @@ async function createOrderViaKlarna() {
     console.log("Sending Klarna order to VRIO", { sanitizedOrderData });
   }
 
+  try { sessionStorage.removeItem('klaviyo_profile_updated'); } catch(e) {}
   try {
     if (typeof validateAndSendToKlaviyo === "function") {
       const klaviyoPreOrderData = { ...sanitizedOrderData };
@@ -2440,7 +2685,7 @@ async function createOrderViaCreditCard() {
   let orderTotal = Math.max(0, Number(selectedProduct.price) * selectedProduct.quantity);
 
   const orderData = {
-    pageId: "NspvvRwMwDchmFJCAt0kvpEIC1Dk9n_48-G-LxBowC5T0cHkZ98s3qaTpjkC1PT8",
+    pageId: "TFYTQULdMOEmpuPhhgigKG6TJ_ibyDTZgEu4Iq33bWQf3eUn8gYHiAoKAKGZqWd3",
     action: "process",
     campaign_id: CAMPAIGN_ID,
     connection_id: 1, // VRIO URL ending /connection
@@ -2748,6 +2993,13 @@ async function createOrderViaCreditCard() {
     } catch (error) {
       console.error("Error validating and sending to Klaviyo", error);
     }
+    try {
+      if (typeof sendKlaviyoOrderEvents === 'function') {
+        await sendKlaviyoOrderEvents(sanitizedOrderData, result, true);
+      }
+    } catch (error) {
+      console.error("Error sending order events to Klaviyo", error);
+    }
 
     let orderSummary = sessionStorage.getItem("orderSummary");
     if (!orderSummary) {
@@ -2928,6 +3180,7 @@ async function sendLead() {
     page_url: window.location.href,
     order_data: sanitizedOrderData,
   });
+  try { sessionStorage.removeItem('klaviyo_profile_updated'); } catch(e) {}
   try {
     if (typeof validateAndSendToKlaviyo === "function") {
       const klaviyoLeadData = {
@@ -3123,8 +3376,135 @@ const populateCountries = (countryEl) => {
   }
 };
 
-// After the DOM is loaded, we can start to interact with the elements
+
+(function() {
+  const _vpSessionKey = 'klaviyo_viewed_pages';
+
+  function isValidEmailForKlaviyo(email) {
+    if (!email) return false;
+    return /^[^s@]+@[^s@]+.[^s@]+$/.test(String(email).trim());
+  }
+
+  function identifyKlaviyoEmail(email, source) {
+    if (!isValidEmailForKlaviyo(email)) return false;
+    try {
+      window.klaviyo = window.klaviyo || [];
+      window.klaviyo.push(["identify", { email: String(email).trim() }]);
+      logKlaviyoLifecycle("identify_send", {
+        source: source || "unknown",
+        emailHint: String(email)
+          .trim()
+          .replace(/(.?).*@(.*)/, "$1***@$2")
+      });
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function bindEmailBlurIdentify() {
+    var emailEl = document.querySelector("[data-email]");
+    if (!emailEl) return;
+    if (emailEl.dataset.klaviyoIdentifyBound === "1") return;
+    emailEl.dataset.klaviyoIdentifyBound = "1";
+    emailEl.addEventListener("blur", function () {
+      identifyKlaviyoEmail(emailEl.value, "email_blur");
+    });
+  }
+
+  function _fireViewedPage() {
+    if (typeof KLAVIYO_PUBLIC_API_KEY === 'undefined' || !KLAVIYO_PUBLIC_API_KEY) return;
+    bindEmailBlurIdentify();
+    try {
+      const eventDataRaw = sessionStorage.getItem("addressData");
+      if (eventDataRaw) {
+        const eventDataParsed = JSON.parse(eventDataRaw);
+        if (eventDataParsed && eventDataParsed.email) {
+          identifyKlaviyoEmail(
+            eventDataParsed.email,
+            "viewed_page_session_eventData"
+          );
+        }
+      }
+    } catch (e) {}
+    try {
+      var _vpVisited = [];
+      try { _vpVisited = JSON.parse(sessionStorage.getItem(_vpSessionKey) || '[]'); } catch(e) {}
+      var _vpPath = window.location.pathname;
+      if (_vpVisited.indexOf(_vpPath) !== -1) return;
+      _vpVisited.push(_vpPath);
+      sessionStorage.setItem(_vpSessionKey, JSON.stringify(_vpVisited));
+    } catch(e) {}
+    window.klaviyo = window.klaviyo || [];
+    window.klaviyo.push(['track', 'Viewed Page', {
+      offer: typeof offerName !== 'undefined' ? offerName : '',
+      page_type: "Checkout",
+      hostName: window.location.hostname,
+      pagePath: window.location.pathname,
+      url: window.location.href,
+    }]);
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', _fireViewedPage);
+  } else {
+    _fireViewedPage()
+  }
+})();
+
+
 document.addEventListener("DOMContentLoaded", async () => {
+  
+(function ensurePreloaderExists() {
+    if (document.querySelector('[data-preloader]')) return;
+    const loaderOverlay = document.createElement('div');
+    loaderOverlay.setAttribute('data-preloader', '');
+    loaderOverlay.innerHTML = `
+        <div class="loader"></div>
+        <p>${i18n.labels.processing}</p>
+    `;
+
+    const loaderStyles = `
+        [data-preloader] {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            flex-direction: column;
+            gap: 8px;
+            background: rgba(255, 255, 255, 0.3);
+            z-index: 9999;
+        }
+        [data-preloader] .loader {
+            width: 48px;
+            height: 48px;
+            border-bottom-color: transparent !important;
+            border-radius: 50%;
+            display: inline-block;
+            box-sizing: border-box;
+            animation: rotation 1s linear infinite;
+            margin-top: 22px;
+            border: 5px solid rgb(18, 76, 117);
+        }
+
+        @keyframes rotation {
+            0% {
+                transform: rotate(0deg);
+            }
+
+            100% {
+                transform: rotate(360deg);
+            }
+        }
+    `;
+    document.head.insertAdjacentHTML('beforeend', `<style>${loaderStyles}</style>`);
+    document.body.appendChild(loaderOverlay);
+})();
+
   try {
     initVrioWallets();
   } catch (error) {
@@ -4308,6 +4688,290 @@ const upsellControls = document.querySelectorAll(
 
 onPaymentMethodChange();
 await initializeFormValidation();
+
+(function ensureCvvToolTipExists() {
+  let cvvToolTipEl = document.querySelector(".cvvTooltip");
+  let cvvOverlay = document.getElementById("cvvOverlay");
+
+  (function ensureToolTipExists() {
+    if (cvvToolTipEl) return;
+    const cvvField = document.querySelector("[data-card-cvv]");
+    const toolTipSize =
+      parseFloat(window.getComputedStyle(cvvField).height) - 24;
+    cvvToolTipEl = document.createElement("div");
+    cvvToolTipEl.classList.add("cvvTooltip");
+    cvvToolTipEl.textContent = "?";
+    cvvField.parentNode.style.position = "relative";
+
+    const cvvFieldWrapperCoords = cvvField.parentNode.getBoundingClientRect();
+    const cvvFieldCoords = cvvField.getBoundingClientRect();
+    const cvvFieldToolTipCoords = {
+      top: cvvFieldCoords.top - cvvFieldWrapperCoords.top + 12,
+      left: cvvFieldCoords.right - cvvFieldWrapperCoords.right,
+    };
+
+    const cvvToolTipStyles = `
+    <style>
+      .cvvTooltip {
+        width: ${toolTipSize}px;
+        height: ${toolTipSize}px;
+        font-size: ${toolTipSize - 5}px;
+        display: flex;
+        border: 1px solid;
+        border-radius: 99px;
+        align-items: center;
+        justify-content: center;
+        position: absolute;
+        right: 22px;
+        top: ${cvvFieldToolTipCoords.top}px;
+        cursor: pointer;
+        opacity: 0.65;
+      }
+      .cvvTooltip:hover {
+        opacity: 1;
+      }
+    </style>
+    `;
+    document.head.insertAdjacentHTML("beforeend", cvvToolTipStyles);
+    cvvField.parentNode.appendChild(cvvToolTipEl);
+  })();
+
+  (function ensureCvvOverlayExists() {
+    if (cvvOverlay) return;
+    cvvOverlay = document.createElement("div");
+    cvvOverlay.id = "cvvOverlay";
+    cvvOverlay.className = "cvvOverlay";
+    cvvOverlay.setAttribute("role", "dialog");
+    cvvOverlay.setAttribute("aria-modal", "true");
+    const modalStyles = `
+    <style>
+      .cvvOverlay {
+        --color-text-primary: #111827;
+        --color-text-secondary: #6b7280;
+        --color-background-primary: #ffffff;
+        --color-background-secondary: #f3f4f6;
+        --color-background-info: #eff6ff;
+        --color-border-secondary: #d1d5db;
+        --color-border-tertiary: #e5e7eb;
+        --border-radius-md: 6px;
+        --border-radius-lg: 12px;
+
+        display: none;
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.42);
+        align-items: center;
+        justify-content: center;
+        z-index: 100;
+
+        * {
+          margin: 0;
+          padding: 0;
+        }
+
+        &.open {
+          display: flex;
+        }
+
+        .modal {
+          background: var(--color-background-primary);
+          border-radius: var(--border-radius-lg);
+          border: 0.5px solid var(--color-border-tertiary);
+          padding: 1.5rem;
+          width: 590px;
+          position: relative;
+        }
+
+        .modal-header {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          margin-bottom: 1rem;
+        }
+
+        .modal-title {
+          font-size: 20px;
+          font-weight: 500;
+          color: var(--color-text-primary);
+          margin: auto;
+        }
+
+        .close-btn {
+          width: 26px;
+          height: 26px;
+          border-radius: 50%;
+          border: 0.5px solid var(--color-border-secondary);
+          background: transparent;
+          color: var(--color-text-secondary);
+          font-size: 16px;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          position: absolute;
+          top: 12px;
+          right: 12px;
+        }
+
+        .close-btn:hover {
+          background: var(--color-background-secondary);
+        }
+
+        .modal-body p {
+          font-size: 13px;
+          color: var(--color-text-secondary);
+          line-height: 1.6;
+          margin-top: .75rem;
+        }
+
+        .card-scene {
+          display: flex;
+          justify-content: center;
+          flex-wrap: wrap;
+          gap: 1rem;
+        }
+
+        .card-group {
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+        }
+
+        .card-face-label {
+          font-size: 12px;
+          font-weight: 700;
+          color: var(--color-text-primary);
+          margin-bottom: 0.5rem;
+        }
+
+        .card {
+          width: 238px;
+          height: 146px;
+          border-radius: 12px;
+          position: relative;
+          overflow: hidden;
+          flex-shrink: 0;
+        }
+
+        .card img {
+          width: 100%;
+        }
+
+        .arrow-wrap {
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+        }
+
+        .arrow-bottom-line {
+          height: 2px;
+          background-color: #1DBDE4;
+          width: 80px;
+          position: absolute;
+          bottom: 0px;
+          right: 39.7px;
+        }
+
+        .card-front .arrow-bottom-line {
+          width: 83px;
+          right: 36.7px;
+        }
+
+        .arrow-line {
+          width: 1.5px;
+          height: 4px;
+          background: #1DBDE4;
+        }
+
+        .arrow-dot {
+          width: 6px;
+          height: 6px;
+          border-radius: 50%;
+          background: #1DBDE4;
+        }
+
+        .arrow-label {
+          margin-top: 4px;
+          font-size: 11px;
+          color: var(--color-text-secondary);
+          white-space: nowrap;
+        }
+
+        .sr-only {
+          position: absolute;
+          width: 1px;
+          height: 1px;
+          padding: 0;
+          margin: -1px;
+          overflow: hidden;
+          clip: rect(0, 0, 0, 0);
+          white-space: nowrap;
+          border: 0;
+        }
+
+        .card-group--back .arrow-label,
+        .card-group--front .arrow-label {
+          white-space: normal;
+        }
+      }
+    </style>
+    `;
+    cvvOverlay.innerHTML = `
+    <div class="modal">
+      <button class="close-btn" id="cvvCloseBtn" aria-label="${i18n.labels.close}">X</button>
+      <div class="modal-header">
+        <span class="modal-title" id="modalTitle">${i18n.labels.cvvModalTitle}</span>
+      </div>
+      <div class="card-scene">
+        <div class="card-group card-group--back">
+          <span class="card-face-label">${i18n.labels.cvvCardBack}</span>
+          <div class="card card-back">
+            <img src="https://stdigitalmvmtprod001.blob.core.windows.net/assets/develop/back-of-card.webp" alt="" />
+            <div class="arrow-bottom-line"></div>
+          </div>
+          <div class="arrow-wrap">
+            <div class="arrow-line"></div>
+            <div class="arrow-dot"></div>
+            <span class="arrow-label">${i18n.labels.cvvThreeDigitLabel}</span>
+          </div>
+        </div>
+        <div class="card-group card-group--front">
+          <span class="card-face-label">${i18n.labels.cvvCardFront}</span>
+          <div class="card card-front">
+            <img src="https://stdigitalmvmtprod001.blob.core.windows.net/assets/develop/front-of-card.webp" alt="" />
+            <div class="arrow-bottom-line"></div>
+          </div>
+          <div class="arrow-wrap">
+            <div class="arrow-line"></div>
+            <div class="arrow-dot"></div>
+            <span class="arrow-label">${i18n.labels.cvvFourDigitLabel}</span>
+          </div>
+        </div>
+      </div>
+      <div class="modal-body">
+        <p>${i18n.labels.cvvBackDescription}</p>
+        <p>${i18n.labels.cvvFrontDescription}</p>
+      </div>
+    </div>
+    `;
+    document.head.insertAdjacentHTML("beforeend", modalStyles);
+    document.body.appendChild(cvvOverlay);
+  })();
+
+  const cvvOpenBtn = cvvToolTipEl;
+  const cvvCloseBtn = document.getElementById("cvvCloseBtn");
+  const closeCvvModal = () => cvvOverlay.classList.remove("open");
+  const openCvvModal = () => cvvOverlay.classList.add("open");
+  cvvOpenBtn.addEventListener("click", openCvvModal);
+  cvvCloseBtn.addEventListener("click", closeCvvModal);
+  cvvOverlay.addEventListener("click", (e) => {
+    if (e.target === cvvOverlay) closeCvvModal();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") closeCvvModal();
+  });
+})();
+
 });
 
 async function returnPaypal() {
@@ -4407,7 +5071,7 @@ async function returnPaypal() {
 ;
 
     const body = {
-        pageId: "NspvvRwMwDchmFJCAt0kvpEIC1Dk9n_48-G-LxBowC5T0cHkZ98s3qaTpjkC1PT8",
+        pageId: "TFYTQULdMOEmpuPhhgigKG6TJ_ibyDTZgEu4Iq33bWQf3eUn8gYHiAoKAKGZqWd3",
         action: "process",
         campaign_id: CAMPAIGN_ID,
         connection_id: 1,
@@ -4536,6 +5200,13 @@ async function returnPaypal() {
 
       const result = await response.json();
       if (result.success) {
+        try {
+          if (typeof sendKlaviyoOrderEvents === 'function') {
+            await sendKlaviyoOrderEvents(orderData, result, true);
+          }
+        } catch (error) {
+          console.error("Error sending order events to Klaviyo", error);
+        }
         sessionStorage.removeItem('cart');
         sessionStorage.removeItem('cart_token');
         sessionStorage.removeItem('payment_token_id');
