@@ -1,7 +1,7 @@
 
 const KLAVIYO_PUBLIC_API_KEY = 'XsRPnE';
 
-const EMAIL_OVERSIGHT_VALIDATE_URL = 'https://app-cms-api-proxy-prod-001.azurewebsites.net/integration/email-oversight/validate-public';
+const EMAIL_OVERSIGHT_VALIDATE_URL = 'http://localhost:5020/integration/email-oversight/validate-public';
 
 
 (function() {
@@ -800,6 +800,7 @@ const i18n = {
     "systemErrorOffer": "There was a problem with this offer. Please contact support or try again later.",
     "systemErrorGeneric": "Something went wrong processing your order. Please try again or contact support if the problem persists.",
     "klarnaNotAvailableRecurring": "Klarna is not available for recurring products.",
+    "klarnaNotAvailable": "Klarna is not available.",
     "klarnaSubscriptionsNotSupported": "Subscriptions are not supported with Klarna",
     "klarnaOrderFailed": "Something went wrong creating the order, please try again",
     "klarnaProcessingFailed": "Something went wrong processing your order, please try again",
@@ -969,10 +970,10 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   const endpoint =
     `orders?order_id=${orderids.join(",")}` +
-    `&with=order_offers,customer_address_billing,customer_address_shipping,customer,transactions,cart&pageId=VIM8VAce8HptEpEFkyhSkUXJEEh8_NiMMnwEgkT_GnlX5-6vai29bMSt-Z7MhM_7`
+    `&with=order_offers,customer_address_billing,customer_address_shipping,customer,transactions,cart&pageId=KHl0lQODgXGzomoPNGJShIzzxZLAWYbG2F6d71qvh5Vt8vhGS6PENGppU5ycYFKo`
 
   const response = await fetch(
-    `https://app-cms-api-proxy-prod-001.azurewebsites.net/vrio/${endpoint}`,
+    `http://localhost:5020/vrio/${endpoint}`,
     {
       method: "GET",
       headers: {
@@ -1196,7 +1197,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         };
 
         const response = await fetch(
-          `https://app-cms-api-proxy-prod-001.azurewebsites.net/vrio/customers/${customerId}/addresses`,
+          `http://localhost:5020/vrio/customers/${customerId}/addresses`,
           {
             method: 'POST',
             headers: {

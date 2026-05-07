@@ -49,7 +49,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 const KLAVIYO_PUBLIC_API_KEY = 'XsRPnE';
 
-const EMAIL_OVERSIGHT_VALIDATE_URL = 'https://app-cms-api-proxy-prod-001.azurewebsites.net/integration/email-oversight/validate-public';
+const EMAIL_OVERSIGHT_VALIDATE_URL = 'http://localhost:5020/integration/email-oversight/validate-public';
 
 const KOUNT_MERCHANT_ID = 'merchant-id-test';
 const KOUNT_ORG_ID = '1snn5n9w'; // Standard Kount org_id for ThreatMetrix
@@ -77,10 +77,33 @@ function getNextPageSlugForRedirect() {
   return "/";
 }
 
+// Pre-fetch the client IP on page load so it's ready when the checkout button is clicked.
+// Stored as a promise — awaiting it multiple times is safe and always resolves to the same value.
+const clientIPPromise = (async () => {
+  try {
+    const response = await fetch("https://api.ipify.org?format=json");
+    const data = await response.json();
+    return data.ip;
+  } catch {
+    return "0.0.0.0";
+  }
+})();
+
+// Prefetch the next page so the browser can start loading it in the background.
+// By the time the order completes and we redirect, it will already be cached.
+
+(function() {
+  var link = document.createElement("link");
+  link.rel = "prefetch";
+  link.href = "/1/order/en/us/upsell1a";
+  document.head.appendChild(link);
+})();
+
+
 let isTest = sessionStorage.getItem("test");
 
 if (isTest === null) {
-  isTest = false;
+  isTest = true;
   sessionStorage.setItem("test", String(isTest));
 } else {
   isTest = isTest === "true";
@@ -231,6 +254,7 @@ const i18n = {
     "systemErrorOffer": "There was a problem with this offer. Please contact support or try again later.",
     "systemErrorGeneric": "Something went wrong processing your order. Please try again or contact support if the problem persists.",
     "klarnaNotAvailableRecurring": "Klarna is not available for recurring products.",
+    "klarnaNotAvailable": "Klarna is not available.",
     "klarnaSubscriptionsNotSupported": "Subscriptions are not supported with Klarna",
     "klarnaOrderFailed": "Something went wrong creating the order, please try again",
     "klarnaProcessingFailed": "Something went wrong processing your order, please try again",
@@ -277,7 +301,7 @@ function formatDateByConvention(year, month, day) {
 const getShippingProfiles = async () => {
   try {
     const response = await fetch(
-      `https://app-cms-api-proxy-prod-001.azurewebsites.net/vrio/campaigns/${CAMPAIGN_ID}?with=shipping_profiles`,
+      `http://localhost:5020/vrio/campaigns/${CAMPAIGN_ID}?with=shipping_profiles`,
       {
         headers: {
           authorization: `appkey ${INTEGRATION_ID}`
@@ -348,6 +372,28 @@ const getPrices = () => {
 };
 
 const SUPPORTED_ADDRESS_COUNTRIES = [{"name":"United States of America","iso_2":"US"},{"name":"Canada","iso_2":"CA"},{"name":"United Kingdom","iso_2":"GB"},{"name":"Australia","iso_2":"AU"},{"name":"Germany","iso_2":"DE"},{"name":"France","iso_2":"FR"},{"name":"Spain","iso_2":"ES"},{"name":"Italy","iso_2":"IT"}];
+
+const mergeWithSupportedAddressCountries = (rawCountries = []) => {
+  const mergedCountries = new Map();
+
+  (Array.isArray(rawCountries) ? rawCountries : []).forEach((country) => {
+    const iso2 = String(country?.iso_2 || country?.code || country?.iso2 || "").toUpperCase();
+    if (!iso2) return;
+    mergedCountries.set(iso2, {
+      ...country,
+      iso_2: iso2,
+      name: country?.name || country?.countryName || iso2,
+    });
+  });
+
+  SUPPORTED_ADDRESS_COUNTRIES.forEach((country) => {
+    if (!mergedCountries.has(country.iso_2)) {
+      mergedCountries.set(country.iso_2, country);
+    }
+  });
+
+  return Array.from(mergedCountries.values());
+};
 
 const getCountries = () => {
   // Campaign countries are the source of truth
@@ -618,7 +664,7 @@ async function createOrderViaWallet(confirmationToken, paymentMethodId) {
         ?.getAttribute("data-shipping-profile-id") || undefined;
 
   const orderData = {
-    pageId: "TFYTQULdMOEmpuPhhgigKG6TJ_ibyDTZgEu4Iq33bWQf3eUn8gYHiAoKAKGZqWd3",
+    pageId: "Yol2aFaFD05NmbCjrA18MyRel9gEVbOIziVKjETJGB1hKaflod3Mip9CG5YnNzBN",
     action: "process",
     campaign_id: CAMPAIGN_ID,
     connection_id: 1,
@@ -802,7 +848,7 @@ async function createOrderViaWallet(confirmationToken, paymentMethodId) {
 
   try {
     const response = await fetch(
-      `https://app-cms-api-proxy-prod-001.azurewebsites.net/vrio/orders`,
+      `http://localhost:5020/vrio/orders`,
       {
         method: "POST",
         headers: {
@@ -1228,14 +1274,7 @@ let formEl, generalError;
 const removeQuantityFromName = (name) => name.replace(/^\d+x\s*/i, "");
 
 async function getClientIP() {
-  try {
-    const response = await fetch("https://api.ipify.org?format=json");
-    const data = await response.json();
-    return data.ip;
-  } catch (error) {
-    console.error("Error fetching IP:", error);
-    return "0.0.0.0";
-  }
+  return clientIPPromise;
 }
 
 function getDataFromSessionStorage() {
@@ -1925,11 +1964,11 @@ function getInPurchaseUpsells() {
             DEFAULT_OFFER_ID,
           item_id: Number(product.dataset.productId),
           order_offer_quantity:
-            Number(product.getAttribute("data-product-quantity")) || 1
+            Number(product.getAttribute("data-non-shippable-quantity") || product.getAttribute("data-product-quantity")) || 1
         };
       }
       const isInput = product.tagName.toLowerCase() === "input";
-      const input = product.querySelector("input");    
+      const input = product.querySelector("input");
       const isBundledInActiveCard =
         product.hasAttribute('data-bundled-upsell') &&
         !!product.closest(".product-card-active");
@@ -2006,7 +2045,7 @@ async function createOrderViaPaypal(isExpress = false) {
   const shippingProfileId = +document.querySelector(`[data-product-id="${selectedProduct.id}"]`)?.getAttribute('data-shipping-profile-id') || undefined;
   const sameAddress = isSameAddress();
   const orderData = {
-    pageId: "TFYTQULdMOEmpuPhhgigKG6TJ_ibyDTZgEu4Iq33bWQf3eUn8gYHiAoKAKGZqWd3",
+    pageId: "Yol2aFaFD05NmbCjrA18MyRel9gEVbOIziVKjETJGB1hKaflod3Mip9CG5YnNzBN",
     action: "process",
     campaign_id: CAMPAIGN_ID,
     connection_id: 1, // VRIO URL ending /connection
@@ -2224,7 +2263,7 @@ async function createOrderViaPaypal(isExpress = false) {
         redirectUrl = window.location.href;
       }
       let paymentTokenResponse = await fetch(
-        `https://app-cms-api-proxy-prod-001.azurewebsites.net/vrio/carts/${cartToken}/payment_tokens`,
+        `http://localhost:5020/vrio/carts/${cartToken}/payment_tokens`,
         {
           method: "POST",
           headers: {
@@ -2251,7 +2290,7 @@ async function createOrderViaPaypal(isExpress = false) {
 
 async function createOrderViaKlarna() {
   if (!isKlarnaEnabled) {
-    showError("Klarna is not available");
+    showError(i18n.errors.klarnaNotAvailable);
     return;
   }
 
@@ -2306,7 +2345,7 @@ async function createOrderViaKlarna() {
   const sameAddress = isSameAddress();
 
   const orderData = {
-    pageId: "TFYTQULdMOEmpuPhhgigKG6TJ_ibyDTZgEu4Iq33bWQf3eUn8gYHiAoKAKGZqWd3",
+    pageId: "Yol2aFaFD05NmbCjrA18MyRel9gEVbOIziVKjETJGB1hKaflod3Mip9CG5YnNzBN",
     campaign_id: CAMPAIGN_ID,
     connection_id: 1,
     email: email,
@@ -2431,6 +2470,7 @@ async function createOrderViaKlarna() {
   saveProductCustomData(selectedProductElement);
   let { product, quantity } =
     getBindedShippableProductAndQuantity(selectedProductElement) ?? {};
+    
   if (product) {
     const bindedOfferData = getVrioOfferInfoByProductId(product.id);
     if (!bindedOfferData?.isRecurringOffer) {
@@ -2526,7 +2566,7 @@ async function createOrderViaKlarna() {
 
   try {
     const createResponse = await fetch(
-      `https://app-cms-api-proxy-prod-001.azurewebsites.net/vrio/orders`,
+      `http://localhost:5020/vrio/orders`,
       {
         method: "POST",
         headers: {
@@ -2685,7 +2725,7 @@ async function createOrderViaCreditCard() {
   let orderTotal = Math.max(0, Number(selectedProduct.price) * selectedProduct.quantity);
 
   const orderData = {
-    pageId: "TFYTQULdMOEmpuPhhgigKG6TJ_ibyDTZgEu4Iq33bWQf3eUn8gYHiAoKAKGZqWd3",
+    pageId: "Yol2aFaFD05NmbCjrA18MyRel9gEVbOIziVKjETJGB1hKaflod3Mip9CG5YnNzBN",
     action: "process",
     campaign_id: CAMPAIGN_ID,
     connection_id: 1, // VRIO URL ending /connection
@@ -2907,7 +2947,7 @@ async function createOrderViaCreditCard() {
 
   try {
     const response = await fetch(
-      `https://app-cms-api-proxy-prod-001.azurewebsites.net/vrio/orders`,
+      `http://localhost:5020/vrio/orders`,
       {
         method: "POST",
         headers: {
@@ -2952,6 +2992,8 @@ async function createOrderViaCreditCard() {
           }
           return;
         }
+
+        showPreloader(false);
 
         var msg = (result && result.error && result.error.message) || (result && result.message) || i18n.errors.creditCardOrderFailed;
         msg = humanizeCountryError(msg);
@@ -3197,7 +3239,7 @@ async function sendLead() {
   } catch (error) {
     console.error("Error validating and sending to Klaviyo", error);
   }
-  await fetch(`https://app-cms-api-proxy-prod-001.azurewebsites.net/vrio/customers`, {
+  await fetch(`http://localhost:5020/vrio/customers`, {
       method: "POST",
       headers: {
         authorization: `appkey ${INTEGRATION_ID}`,
@@ -3251,7 +3293,7 @@ const getStates = async (countryIso2Code) => {
       (c) => String(c.code || c.iso_2 || c.iso2 || '').toUpperCase() === iso2
     );
     const states = (found && Array.isArray(found.states)) ? found.states : [];
-    return states.map(s => ({ iso2: s.iso2 || s.code || s.iso_2 || s.abbr || '', name: s.name || s.label || '' }));
+    return states.map(s => ({ iso2: s.code || s.iso_2 || s.abbr || s.name || s.label || '', name: s.name || s.label || '' }));    
   } catch (error) {
     console.error("Error getting states", error);
     return [];
@@ -3343,7 +3385,7 @@ const populateStates = async (stateSelector, countryIso2Code) => {
 
   states.forEach((state) => {
     const option = document.createElement("option");
-    option.value = state.iso2 || '';
+    option.value = state.iso2 || state.name || '';
     option.innerText = state.name;
     stateEl.appendChild(option);
   });
@@ -4741,8 +4783,8 @@ await initializeFormValidation();
     cvvOverlay = document.createElement("div");
     cvvOverlay.id = "cvvOverlay";
     cvvOverlay.className = "cvvOverlay";
-    cvvOverlay.setAttribute("role", "dialog");
-    cvvOverlay.setAttribute("aria-modal", "true");
+    cvvOverlay.role = "dialog";
+    cvvOverlay.ariaModal = "true";
     const modalStyles = `
     <style>
       .cvvOverlay {
@@ -4990,7 +5032,7 @@ async function returnPaypal() {
     showPreloader(true);
     const paymentToken = sessionStorage.getItem("payment_token_id");
     let responseCustomer = await fetch(
-      `https://app-cms-api-proxy-prod-001.azurewebsites.net/vrio/carts/${cartToken}/payment_tokens/${paymentToken}`, {
+      `http://localhost:5020/vrio/carts/${cartToken}/payment_tokens/${paymentToken}`, {
       headers: {
         authorization: `appkey ${INTEGRATION_ID}`,
         "Content-Type": "application/json",
@@ -5071,7 +5113,7 @@ async function returnPaypal() {
 ;
 
     const body = {
-        pageId: "TFYTQULdMOEmpuPhhgigKG6TJ_ibyDTZgEu4Iq33bWQf3eUn8gYHiAoKAKGZqWd3",
+        pageId: "Yol2aFaFD05NmbCjrA18MyRel9gEVbOIziVKjETJGB1hKaflod3Mip9CG5YnNzBN",
         action: "process",
         campaign_id: CAMPAIGN_ID,
         connection_id: 1,
@@ -5173,7 +5215,7 @@ async function returnPaypal() {
 
     try {
       const response = await fetch(
-        "https://app-cms-api-proxy-prod-001.azurewebsites.net/vrio/orders",
+        "http://localhost:5020/vrio/orders",
         {
           method: "POST",
           headers: {
@@ -5337,7 +5379,7 @@ if (checkoutErrorParam) {
 }
 const createCart = async (sanitizedOrderData) => {
     let cartResponse = await fetch(
-    `https://app-cms-api-proxy-prod-001.azurewebsites.net/vrio/carts`,
+    `http://localhost:5020/vrio/carts`,
     {
       method: 'POST',
       headers: {
@@ -5348,6 +5390,7 @@ const createCart = async (sanitizedOrderData) => {
         offers: sanitizedOrderData.offers,
         campaign_id: CAMPAIGN_ID,
         connection_id: sanitizedOrderData.connection_id,
+        pageId: sanitizedOrderData.pageId,
       }),
       keepalive: false,
     }
@@ -5362,7 +5405,7 @@ const flagOrderAsTest = async (orderId) => {
   if (!orderId) return null;
   try {
     const res = await fetch(
-      `https://app-cms-api-proxy-prod-001.azurewebsites.net/vrio/orders/${orderId}`,
+      `http://localhost:5020/vrio/orders/${orderId}`,
       {
         method: "PATCH",
         headers: {
@@ -5404,7 +5447,7 @@ const processAndRedirectToKlarna = async (orderId, redirectUrl) => {
   const finalRedirectUrl = redirectUrl || window.location.href;
 
   const processResponse = await fetch(
-    `https://app-cms-api-proxy-prod-001.azurewebsites.net/vrio/orders/${orderId}/process`,
+    `http://localhost:5020/vrio/orders/${orderId}/process`,
     {
       method: "POST",
       headers: {
@@ -5628,17 +5671,17 @@ function handleFreeGiftParam(allProducts) {
       const currentUnitPrice = Number(currentProduct?.price || 0);
 
       if (currentProduct) {
+        if (shouldSkipRecurring && isRecurringByProductId(currentProduct.id)) {
+          // Skip recurring main product for Klarna
+        } else {
+        let quantity = Number(currentProduct.quantity || 1);
         const fullPriceNode = document.querySelector(
           `[data-product-card][data-product-id='${currentProduct.id}'] [data_product_full_price]`,
         );
         const fullPriceElement = fullPriceNode
           ? parseFloat(fullPriceNode.innerHTML.replaceAll(",", ".").replace(/[^0-9.,]+/g, '')) || 0
-          : currentUnitPrice;
+          : currentUnitPrice * quantity;
         hasItems = true;
-        if (shouldSkipRecurring && isRecurringByProductId(currentProduct.id)) {
-          // Skip recurring main product for Klarna
-        } else {
-        let quantity = Number(currentProduct.quantity || 1);
         const itemContainer = document.createElement('div');
         itemContainer.style.display = 'flex';
         itemContainer.style.justifyContent = 'space-between';
@@ -5668,7 +5711,7 @@ function handleFreeGiftParam(allProducts) {
 
         itemContainer.appendChild(itemDetails);
         itemContainer.appendChild(priceElement);
-        summaryList.appendChild(itemContainer);
+        if (summaryList) summaryList.appendChild(itemContainer);
 
         total += currentUnitPrice * quantity;
         subTotal += fullPriceElement;
@@ -5701,6 +5744,7 @@ function handleFreeGiftParam(allProducts) {
               checked: checkbox ? checkbox.checked : true,
               quantity:
                 Number(
+                  activeOptionProduct.getAttribute("data-non-shippable-quantity") ||
                   activeOptionProduct.getAttribute("data-product-quantity")
                 ) || 1
             });
@@ -5777,7 +5821,7 @@ function handleFreeGiftParam(allProducts) {
           subTotal += isGift ? 0 : product.finalPrice * productObject.quantity;
         }
       });
-      if (!hasItems) {
+      if (!hasItems && summaryList) {
         const noItemsMessage = document.createElement('div');
         noItemsMessage.textContent = '';
         noItemsMessage.style.textAlign = 'center';
@@ -5838,6 +5882,21 @@ function handleFreeGiftParam(allProducts) {
               id: foundProduct.id || 0,
               price: unitPrices[index],
             };
+
+            const cardTextMatch = (card.textContent || '').match(/(\d+)\s*%\s*off/i);
+            const discountPct = Number(card.getAttribute('data-product-discount')) || Number(foundProduct.discountPercentage) || (cardTextMatch ? Number(cardTextMatch[1]) : 0);
+            if (discountPct) {
+              document.querySelectorAll('.mvmt-discount-amount').forEach((el) => {
+                if (/^\d+$/.test((el.textContent || '').trim())) {
+                  el.textContent = String(discountPct);
+                }
+              });
+              document.querySelectorAll('[data-url-param-timer] span').forEach((el) => {
+                if (el.textContent && /\d+%\s*discount/i.test(el.textContent)) {
+                  el.textContent = el.textContent.replace(/\d+(?=%\s*discount)/i, String(discountPct));
+                }
+              });
+            }
           }
         }
 

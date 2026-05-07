@@ -1,11 +1,11 @@
 
 const KLAVIYO_PUBLIC_API_KEY = 'XsRPnE';
 
-const EMAIL_OVERSIGHT_VALIDATE_URL = 'https://app-cms-api-proxy-prod-001.azurewebsites.net/integration/email-oversight/validate-public';
+const EMAIL_OVERSIGHT_VALIDATE_URL = 'http://localhost:5020/integration/email-oversight/validate-public';
 
 let isTest = sessionStorage.getItem("test");
 if (isTest === null && isTest !== false) {
-  isTest = false;
+  isTest = true;
   sessionStorage.setItem("test", isTest);
 }
 
@@ -729,6 +729,7 @@ const i18n = {
     "systemErrorOffer": "There was a problem with this offer. Please contact support or try again later.",
     "systemErrorGeneric": "Something went wrong processing your order. Please try again or contact support if the problem persists.",
     "klarnaNotAvailableRecurring": "Klarna is not available for recurring products.",
+    "klarnaNotAvailable": "Klarna is not available.",
     "klarnaSubscriptionsNotSupported": "Subscriptions are not supported with Klarna",
     "klarnaOrderFailed": "Something went wrong creating the order, please try again",
     "klarnaProcessingFailed": "Something went wrong processing your order, please try again",
@@ -919,7 +920,7 @@ function removeObjectUndefinedProperties(obj) {
 }
 const createCart = async (sanitizedOrderData) => {
     let cartResponse = await fetch(
-    `https://app-cms-api-proxy-prod-001.azurewebsites.net/vrio/carts`,
+    `http://localhost:5020/vrio/carts`,
     {
       method: 'POST',
       headers: {
@@ -930,6 +931,7 @@ const createCart = async (sanitizedOrderData) => {
         offers: sanitizedOrderData.offers,
         campaign_id: CAMPAIGN_ID,
         connection_id: sanitizedOrderData.connection_id,
+        pageId: sanitizedOrderData.pageId,
       }),
       keepalive: false,
     }
@@ -952,7 +954,7 @@ const flagOrderAsTest = async (orderId) => {
   if (!orderId) return null;
   try {
     const res = await fetch(
-      `https://app-cms-api-proxy-prod-001.azurewebsites.net/vrio/orders/${orderId}`,
+      `http://localhost:5020/vrio/orders/${orderId}`,
       {
         method: "PATCH",
         headers: {
@@ -1176,7 +1178,7 @@ const processAndRedirectToKlarna = async (orderId, redirectUrl) => {
   const finalRedirectUrl = redirectUrl || window.location.href;
 
   const processResponse = await fetch(
-    `https://app-cms-api-proxy-prod-001.azurewebsites.net/vrio/orders/${orderId}/process`,
+    `http://localhost:5020/vrio/orders/${orderId}/process`,
     {
       method: "POST",
       headers: {
@@ -1233,7 +1235,7 @@ async function returnKlarna() {
   if (!orderId) {
     console.error("Klarna return: no order ID found in sessionStorage");
     if (preload) preload.style.display = "none";
-    showErrorAndRedirect(i18n.errors.orderNotFoundRedirect, "checkout");
+    showErrorAndRedirect(i18n.errors.orderNotFound, "checkout");
     return;
   }
 
@@ -1242,7 +1244,7 @@ async function returnKlarna() {
 
   try {
     const response = await fetch(
-      `https://app-cms-api-proxy-prod-001.azurewebsites.net/vrio/orders/${orderId}/complete`,
+      `http://localhost:5020/vrio/orders/${orderId}/complete`,
       {
         method: "POST",
         headers: {
@@ -1369,14 +1371,14 @@ async function returnKlarna() {
       );
       return;
     }
-    showErrorAndRedirect(i18n.errors.unexpectedErrorRedirect, "checkout");
+    showErrorAndRedirect(i18n.errors.unexpectedError, "checkout");
   }
 }
 
 const declineKlarnaUpsell = async () => {
   if (!isKlarnaPayment) {
     showErrorAndRedirect(
-      "Klarna is not available",
+      i18n.errors.klarnaNotAvailable,
       "checkout"
     );
     return;
@@ -1414,7 +1416,7 @@ const declineKlarnaUpsell = async () => {
       return;
     }
     showErrorAndRedirect(
-      error.message || i18n.errors.unexpectedErrorRedirect,
+      error.message || i18n.errors.unexpectedError,
       "checkout"
     );
   } finally {
@@ -1426,7 +1428,7 @@ const declineKlarnaUpsell = async () => {
 
 const processKlarnaUpsell = async () => {
   if (!isKlarnaPayment) {
-    throw new Error("Klarna is not available");
+    throw new Error(i18n.errors.klarnaNotAvailable);
   }
   setUpsellButtonsDisabled(true);
 
@@ -1516,7 +1518,7 @@ const processKlarnaUpsell = async () => {
 
     // Add offers to existing order via API
     const response = await fetch(
-      `https://app-cms-api-proxy-prod-001.azurewebsites.net/vrio/order_offers`,
+      `http://localhost:5020/vrio/order_offers`,
       {
         method: "POST",
         headers: {
@@ -1526,7 +1528,7 @@ const processKlarnaUpsell = async () => {
         body: JSON.stringify({
           offers: offers.map((o) => JSON.stringify(o)),
           order_id: lastOrderId,
-          pageId: "BW_ALuR5hQR4ODfO3bBas_mL90Af3Zysmyl7WGRB_z84_bLg8M6EPE092mInyJs5"
+          pageId: "eRIfIHrwvcApHH3DpPy6OrXnCzILGNwI52Gq4YW65k_mhJhz_zCVBMLU5XxcoEt3"
         })
       }
     );
@@ -1606,7 +1608,7 @@ const processUpsell = async () => {
   }
   try {
     const orderData = JSON.parse(sessionStorage.getItem("orderData"));
-    orderData.pageId = "BW_ALuR5hQR4ODfO3bBas_mL90Af3Zysmyl7WGRB_z84_bLg8M6EPE092mInyJs5";
+    orderData.pageId = "eRIfIHrwvcApHH3DpPy6OrXnCzILGNwI52Gq4YW65k_mhJhz_zCVBMLU5XxcoEt3";
     const lastOrderId = sessionStorage.getItem("cms_oid");
     const stripePayment = JSON.parse(sessionStorage.getItem("stripePayment"));
     const isStripeTestOrder = stripePayment && !stripePayment.isLive;
@@ -1679,7 +1681,7 @@ const processUpsell = async () => {
     });
 
     const response = await fetch(
-      `https://app-cms-api-proxy-prod-001.azurewebsites.net/vrio/orders`,
+      `http://localhost:5020/vrio/orders`,
       {
         method: "POST",
         headers: {
