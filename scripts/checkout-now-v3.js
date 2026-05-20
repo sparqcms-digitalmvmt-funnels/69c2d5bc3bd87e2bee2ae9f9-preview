@@ -47,8 +47,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 });
 
-const KLAVIYO_PUBLIC_API_KEY = 'XsRPnE';
-
+const KLAVIYO_PUBLIC_API_KEY = 'Y6nMGP';
+const KLAVIYO_LIST_ID = 'S4ZYFH';
 const EMAIL_OVERSIGHT_VALIDATE_URL = 'http://localhost:5020/integration/email-oversight/validate-public';
 
 const KOUNT_MERCHANT_ID = 'merchant-id-test';
@@ -664,7 +664,7 @@ async function createOrderViaWallet(confirmationToken, paymentMethodId) {
         ?.getAttribute("data-shipping-profile-id") || undefined;
 
   const orderData = {
-    pageId: "Yol2aFaFD05NmbCjrA18MyRel9gEVbOIziVKjETJGB1hKaflod3Mip9CG5YnNzBN",
+    pageId: "6NBKPgoj_uGG4Ori5bEd4N6RZ1-yaTSVTAuR3d0CWCMkdTtUIWKy3_N0xtZX3Kgr",
     action: "process",
     campaign_id: CAMPAIGN_ID,
     connection_id: 1,
@@ -1020,6 +1020,7 @@ function getOrCreateErrorElement() {
   if (submitBtn && submitBtn.parentNode) {
     el = document.createElement("div");
     el.setAttribute("data-general-error", "");
+    el.setAttribute("data-testid", "general-error");
     el.style.cssText = "background:#fee2e2;border:1px solid #ef4444;color:#b91c1c;padding:12px 16px;border-radius:6px;margin-bottom:12px;font-size:14px;display:none;";
     submitBtn.parentNode.insertBefore(el, submitBtn);
     return el;
@@ -1043,6 +1044,7 @@ function getOrCreatePaymentErrorElement() {
   if (paymentContainer && paymentContainer.parentNode) {
     el = document.createElement("div");
     el.setAttribute("data-payment-error", "");
+    el.setAttribute("data-testid", "payment-error");
     el.style.cssText = "background:#fee2e2;border:1px solid #ef4444;color:#b91c1c;padding:12px 16px;border-radius:6px;margin-bottom:12px;font-size:14px;display:none;";
     paymentContainer.parentNode.insertBefore(el, paymentContainer);
     return el;
@@ -1576,6 +1578,33 @@ async function sendKlaviyoEvent(eventData, eventName, source, eventPropertiesToS
 
   var profileOk = false;
 
+  var subProfileAttrs = { email: eventData.email };
+  if (phoneE164) subProfileAttrs.phone_number = phoneE164;
+  subProfileAttrs.subscriptions = {};
+  if (eventData.email) {
+    subProfileAttrs.subscriptions.email = { marketing: { consent: 'SUBSCRIBED' } };
+  }
+  if (phoneE164) {
+    subProfileAttrs.subscriptions.sms = { marketing: { consent: 'SUBSCRIBED' } };
+  }
+  var subscriptionPayload = {
+    data: {
+      type: 'subscription',
+      attributes: {
+        profile: {
+          data: {
+            type: 'profile',
+            attributes: subProfileAttrs,
+          },
+        },
+        custom_source: 'VRIO checkout',
+      },
+      relationships: {
+        list: { data: { type: 'list', id: KLAVIYO_LIST_ID } },
+      },
+    },
+  };
+
 
   let aosSent = false;
   try { aosSent = !!sessionStorage.getItem('klaviyo_aos_sent'); } catch(e) {}
@@ -1681,8 +1710,25 @@ async function sendKlaviyoEvent(eventData, eventName, source, eventPropertiesToS
     });
 
 
-  logKlaviyoLifecycle('subscription_skipped', { reason: 'no_list_id' });
-  var subscriptionPromise = Promise.resolve();
+  var subChannels = [];
+  if (eventData.email) subChannels.push('email');
+  if (phoneE164) subChannels.push('sms');
+  logKlaviyoLifecycle('subscription_send_start', { hasEmail: !!eventData.email, hasPhone: !!phoneE164, subscriptionsChannels: subChannels });
+
+  var subscriptionPromise = fetch(`https://a.klaviyo.com/client/subscriptions?company_id=${KLAVIYO_PUBLIC_API_KEY}`, {
+    method: 'POST',
+    headers: { accept: 'application/vnd.api+json', revision: KLAVIYO_API_REVISION, 'content-type': 'application/vnd.api+json' },
+    body: JSON.stringify(subscriptionPayload),
+    keepalive: true,
+  }).then(function(res) {
+    logKlaviyoLifecycle('subscription_send_done', { status: res.ok ? 'ok' : 'fail', statusCode: res.status });
+    if (!res.ok && typeof console !== 'undefined' && console.warn) {
+      console.warn('[Klaviyo] subscription failed', res.status);
+    }
+    return res;
+  }).catch(function() {
+    logKlaviyoLifecycle('subscription_send_done', { status: 'fail' });
+  });
 
   } else {
     profileOk = true; // already succeeded this submit attempt, allow event tracking
@@ -2045,7 +2091,7 @@ async function createOrderViaPaypal(isExpress = false) {
   const shippingProfileId = +document.querySelector(`[data-product-id="${selectedProduct.id}"]`)?.getAttribute('data-shipping-profile-id') || undefined;
   const sameAddress = isSameAddress();
   const orderData = {
-    pageId: "Yol2aFaFD05NmbCjrA18MyRel9gEVbOIziVKjETJGB1hKaflod3Mip9CG5YnNzBN",
+    pageId: "6NBKPgoj_uGG4Ori5bEd4N6RZ1-yaTSVTAuR3d0CWCMkdTtUIWKy3_N0xtZX3Kgr",
     action: "process",
     campaign_id: CAMPAIGN_ID,
     connection_id: 1, // VRIO URL ending /connection
@@ -2345,7 +2391,7 @@ async function createOrderViaKlarna() {
   const sameAddress = isSameAddress();
 
   const orderData = {
-    pageId: "Yol2aFaFD05NmbCjrA18MyRel9gEVbOIziVKjETJGB1hKaflod3Mip9CG5YnNzBN",
+    pageId: "6NBKPgoj_uGG4Ori5bEd4N6RZ1-yaTSVTAuR3d0CWCMkdTtUIWKy3_N0xtZX3Kgr",
     campaign_id: CAMPAIGN_ID,
     connection_id: 1,
     email: email,
@@ -2725,7 +2771,7 @@ async function createOrderViaCreditCard() {
   let orderTotal = Math.max(0, Number(selectedProduct.price) * selectedProduct.quantity);
 
   const orderData = {
-    pageId: "Yol2aFaFD05NmbCjrA18MyRel9gEVbOIziVKjETJGB1hKaflod3Mip9CG5YnNzBN",
+    pageId: "6NBKPgoj_uGG4Ori5bEd4N6RZ1-yaTSVTAuR3d0CWCMkdTtUIWKy3_N0xtZX3Kgr",
     action: "process",
     campaign_id: CAMPAIGN_ID,
     connection_id: 1, // VRIO URL ending /connection
@@ -3498,11 +3544,22 @@ const populateCountries = (countryEl) => {
 document.addEventListener("DOMContentLoaded", async () => {
   
 (function ensurePreloaderExists() {
-    if (document.querySelector('[data-preloader]')) return;
+    const existing = document.querySelector('[data-preloader]');
+    if (existing) {
+        if (!existing.getAttribute('data-testid')) {
+            existing.setAttribute('data-testid', 'preloader');
+        }
+        const spinner = existing.querySelector('.loader');
+        if (spinner && !spinner.getAttribute('data-testid')) {
+            spinner.setAttribute('data-testid', 'preloader-spinner');
+        }
+        return;
+    }
     const loaderOverlay = document.createElement('div');
     loaderOverlay.setAttribute('data-preloader', '');
+    loaderOverlay.setAttribute('data-testid', 'preloader');
     loaderOverlay.innerHTML = `
-        <div class="loader"></div>
+        <div class="loader" data-testid="preloader-spinner"></div>
         <p>${i18n.labels.processing}</p>
     `;
 
@@ -4742,6 +4799,7 @@ await initializeFormValidation();
       parseFloat(window.getComputedStyle(cvvField).height) - 24;
     cvvToolTipEl = document.createElement("div");
     cvvToolTipEl.classList.add("cvvTooltip");
+    cvvToolTipEl.setAttribute("data-testid", "button-cvv-tooltip");
     cvvToolTipEl.textContent = "?";
     cvvField.parentNode.style.position = "relative";
 
@@ -4785,6 +4843,7 @@ await initializeFormValidation();
     cvvOverlay.className = "cvvOverlay";
     cvvOverlay.role = "dialog";
     cvvOverlay.ariaModal = "true";
+    cvvOverlay.setAttribute("data-testid", "modal-cvv");
     const modalStyles = `
     <style>
       .cvvOverlay {
@@ -4960,7 +5019,7 @@ await initializeFormValidation();
     `;
     cvvOverlay.innerHTML = `
     <div class="modal">
-      <button class="close-btn" id="cvvCloseBtn" aria-label="${i18n.labels.close}">X</button>
+      <button class="close-btn" id="cvvCloseBtn" data-testid="button-modal-cvv-close" aria-label="${i18n.labels.close}">X</button>
       <div class="modal-header">
         <span class="modal-title" id="modalTitle">${i18n.labels.cvvModalTitle}</span>
       </div>
@@ -5014,6 +5073,27 @@ await initializeFormValidation();
   });
 })();
 
+
+  // Pre-create cart on page load with the default selected product to avoid ~2-4s createCart delay on submit.
+  // Silent fallback — if this fails, cart is created at submit time as before.
+  (async () => {
+    try {
+      if (!sessionStorage.getItem('cart_token') && selectedProduct) {
+        await createCart({
+          offers: [{
+            offer_id: getVrioOfferIdByProductId(selectedProduct.id) ?? DEFAULT_OFFER_ID,
+            order_offer_quantity: 1,
+            item_id: Number(selectedProduct.id),
+            mainOffer: true,
+          }],
+          pageId: "6NBKPgoj_uGG4Ori5bEd4N6RZ1-yaTSVTAuR3d0CWCMkdTtUIWKy3_N0xtZX3Kgr",
+          connection_id: 1,
+        });
+      }
+    } catch (_) {
+      // silent — cart will be created at submit time
+    }
+  })();
 });
 
 async function returnPaypal() {
@@ -5113,7 +5193,7 @@ async function returnPaypal() {
 ;
 
     const body = {
-        pageId: "Yol2aFaFD05NmbCjrA18MyRel9gEVbOIziVKjETJGB1hKaflod3Mip9CG5YnNzBN",
+        pageId: "6NBKPgoj_uGG4Ori5bEd4N6RZ1-yaTSVTAuR3d0CWCMkdTtUIWKy3_N0xtZX3Kgr",
         action: "process",
         campaign_id: CAMPAIGN_ID,
         connection_id: 1,
@@ -5196,6 +5276,7 @@ async function returnPaypal() {
         offer_id: getVrioOfferIdByProductId(product.item_id) ?? DEFAULT_OFFER_ID,
         item_id: Number(product.item_id),
         order_offer_quantity: product.order_offer_quantity,
+        ...(product.mainOffer ? { mainOffer: true } : {}),
       });
     });
 
@@ -5344,6 +5425,7 @@ const showToast = function(message, bg = "#333") {
     (() => {
       const div = document.createElement("div");
       div.id = "toast-container";
+      div.setAttribute("data-testid", "toast-container");
       div.style.position = "fixed";
       div.style.top = "10px";
       div.style.right = "10px";
@@ -5354,6 +5436,7 @@ const showToast = function(message, bg = "#333") {
 
   const toast = document.createElement("div");
   toast.className = "mytoast";
+  toast.setAttribute("data-testid", "toast");
   toast.textContent = message;
   toast.style.background = bg;
   toast.style.color = "#fff";
@@ -5576,6 +5659,7 @@ function handleFreeGiftParam(allProducts) {
         discountSpan = document.createElement('span');
         discountSpan.className = 'discount-percentage';
         discountSpan.style = 'white-space: nowrap !important;';
+        discountSpan.setAttribute('data-testid', 'discount-percentage');
         container.appendChild(discountSpan);
       }
 
@@ -5688,17 +5772,20 @@ function handleFreeGiftParam(allProducts) {
         itemContainer.style.alignItems = 'center';
         itemContainer.style.width = '100%';
         itemContainer.style.gap = '10px';
+        itemContainer.setAttribute('data-testid', 'summary-item');
 
         const itemDetails = document.createElement('div');
         itemDetails.style.display = 'flex';
         itemDetails.style.gap = '5px';
         itemDetails.style.alignItems = 'center';
         itemDetails.style.flex = '1';
+        itemDetails.setAttribute('data-testid', 'summary-name');
 
         const priceElement = document.createElement('div');
         priceElement.style.fontWeight = 'bold';
         priceElement.style.minWidth = '70px';
         priceElement.style.textAlign = 'right';
+        priceElement.setAttribute('data-testid', 'summary-price-unit');
         let customName = ""
         productsElements.forEach((el) => {
           if (el.dataset.productId == currentProduct.id) customName = el.dataset.customProductName;
@@ -5795,14 +5882,17 @@ function handleFreeGiftParam(allProducts) {
         itemContainer.style.alignItems = 'center';
         itemContainer.style.width = '100%';
         itemContainer.style.gap = '10px';
+        itemContainer.setAttribute('data-testid', 'summary-item');
 
         const itemDetails = document.createElement('div');
         itemDetails.style.display = 'flex';
         itemDetails.style.gap = '5px';
         itemDetails.style.alignItems = 'center';
+        itemDetails.setAttribute('data-testid', 'summary-name');
 
         const priceElement = document.createElement('div');
         priceElement.style.fontWeight = 'bold';
+        priceElement.setAttribute('data-testid', 'summary-price-unit');
         itemDetails.innerHTML = `
           <div style="flex: 1; display: flex; gap: 5px; align-items: center;">
               ${productObject.quantity > 1 ? `<span>${productObject.quantity}x</span>` : ''}
@@ -5826,6 +5916,7 @@ function handleFreeGiftParam(allProducts) {
         noItemsMessage.textContent = '';
         noItemsMessage.style.textAlign = 'center';
         noItemsMessage.style.width = '100%';
+        noItemsMessage.setAttribute('data-testid', 'summary-empty');
         summaryList.appendChild(noItemsMessage);
       }
 

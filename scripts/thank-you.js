@@ -1,6 +1,6 @@
 
-const KLAVIYO_PUBLIC_API_KEY = 'XsRPnE';
-
+const KLAVIYO_PUBLIC_API_KEY = 'Y6nMGP';
+const KLAVIYO_LIST_ID = 'S4ZYFH';
 const EMAIL_OVERSIGHT_VALIDATE_URL = 'http://localhost:5020/integration/email-oversight/validate-public';
 
 
@@ -266,6 +266,33 @@ async function sendKlaviyoEvent(eventData, eventName, source, eventPropertiesToS
 
   var profileOk = false;
 
+  var subProfileAttrs = { email: eventData.email };
+  if (phoneE164) subProfileAttrs.phone_number = phoneE164;
+  subProfileAttrs.subscriptions = {};
+  if (eventData.email) {
+    subProfileAttrs.subscriptions.email = { marketing: { consent: 'SUBSCRIBED' } };
+  }
+  if (phoneE164) {
+    subProfileAttrs.subscriptions.sms = { marketing: { consent: 'SUBSCRIBED' } };
+  }
+  var subscriptionPayload = {
+    data: {
+      type: 'subscription',
+      attributes: {
+        profile: {
+          data: {
+            type: 'profile',
+            attributes: subProfileAttrs,
+          },
+        },
+        custom_source: 'VRIO checkout',
+      },
+      relationships: {
+        list: { data: { type: 'list', id: KLAVIYO_LIST_ID } },
+      },
+    },
+  };
+
 
   let aosSent = false;
   try { aosSent = !!sessionStorage.getItem('klaviyo_aos_sent'); } catch(e) {}
@@ -371,8 +398,25 @@ async function sendKlaviyoEvent(eventData, eventName, source, eventPropertiesToS
     });
 
 
-  logKlaviyoLifecycle('subscription_skipped', { reason: 'no_list_id' });
-  var subscriptionPromise = Promise.resolve();
+  var subChannels = [];
+  if (eventData.email) subChannels.push('email');
+  if (phoneE164) subChannels.push('sms');
+  logKlaviyoLifecycle('subscription_send_start', { hasEmail: !!eventData.email, hasPhone: !!phoneE164, subscriptionsChannels: subChannels });
+
+  var subscriptionPromise = fetch(`https://a.klaviyo.com/client/subscriptions?company_id=${KLAVIYO_PUBLIC_API_KEY}`, {
+    method: 'POST',
+    headers: { accept: 'application/vnd.api+json', revision: KLAVIYO_API_REVISION, 'content-type': 'application/vnd.api+json' },
+    body: JSON.stringify(subscriptionPayload),
+    keepalive: true,
+  }).then(function(res) {
+    logKlaviyoLifecycle('subscription_send_done', { status: res.ok ? 'ok' : 'fail', statusCode: res.status });
+    if (!res.ok && typeof console !== 'undefined' && console.warn) {
+      console.warn('[Klaviyo] subscription failed', res.status);
+    }
+    return res;
+  }).catch(function() {
+    logKlaviyoLifecycle('subscription_send_done', { status: 'fail' });
+  });
 
   } else {
     profileOk = true; // already succeeded this submit attempt, allow event tracking
@@ -965,12 +1009,13 @@ const elementsMappingContent = {
 
 
 document.addEventListener("DOMContentLoaded", async () => {
+  try {
   applyKlarnaVisibilityForThankYou();
   const orderids = JSON.parse(sessionStorage.getItem("orderids"));
 
   const endpoint =
     `orders?order_id=${orderids.join(",")}` +
-    `&with=order_offers,customer_address_billing,customer_address_shipping,customer,transactions,cart&pageId=KHl0lQODgXGzomoPNGJShIzzxZLAWYbG2F6d71qvh5Vt8vhGS6PENGppU5ycYFKo`
+    `&with=order_offers,customer_address_billing,customer_address_shipping,customer,transactions,cart&pageId=Gc1_0DZZq4k48Z3eDA6o6umd47zgxYamhyY3GlaFEX7TxGPdxeNjO7LBTJdcFOAU`
 
   const response = await fetch(
     `http://localhost:5020/vrio/${endpoint}`,
@@ -1135,6 +1180,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     function buildCountrySelect(currentValue) {
       const select = document.createElement("select");
       select.style.width = "100%";
+      select.setAttribute("data-testid", "dropdown-country");
       campaignInfo.countries.forEach((country) => {
         const option = document.createElement("option");
         option.value = country.iso_2;
@@ -1543,6 +1589,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 
   
+  } finally { if (window.__hidePreloader) window.__hidePreloader(); }
 });
 
 const vrioToTransaction = (orderResult) => {

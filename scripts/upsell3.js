@@ -1,6 +1,6 @@
 
-const KLAVIYO_PUBLIC_API_KEY = 'XsRPnE';
-
+const KLAVIYO_PUBLIC_API_KEY = 'Y6nMGP';
+const KLAVIYO_LIST_ID = 'S4ZYFH';
 const EMAIL_OVERSIGHT_VALIDATE_URL = 'http://localhost:5020/integration/email-oversight/validate-public';
 
 let isTest = sessionStorage.getItem("test");
@@ -272,6 +272,33 @@ async function sendKlaviyoEvent(eventData, eventName, source, eventPropertiesToS
 
   var profileOk = false;
 
+  var subProfileAttrs = { email: eventData.email };
+  if (phoneE164) subProfileAttrs.phone_number = phoneE164;
+  subProfileAttrs.subscriptions = {};
+  if (eventData.email) {
+    subProfileAttrs.subscriptions.email = { marketing: { consent: 'SUBSCRIBED' } };
+  }
+  if (phoneE164) {
+    subProfileAttrs.subscriptions.sms = { marketing: { consent: 'SUBSCRIBED' } };
+  }
+  var subscriptionPayload = {
+    data: {
+      type: 'subscription',
+      attributes: {
+        profile: {
+          data: {
+            type: 'profile',
+            attributes: subProfileAttrs,
+          },
+        },
+        custom_source: 'VRIO checkout',
+      },
+      relationships: {
+        list: { data: { type: 'list', id: KLAVIYO_LIST_ID } },
+      },
+    },
+  };
+
 
   let aosSent = false;
   try { aosSent = !!sessionStorage.getItem('klaviyo_aos_sent'); } catch(e) {}
@@ -377,8 +404,25 @@ async function sendKlaviyoEvent(eventData, eventName, source, eventPropertiesToS
     });
 
 
-  logKlaviyoLifecycle('subscription_skipped', { reason: 'no_list_id' });
-  var subscriptionPromise = Promise.resolve();
+  var subChannels = [];
+  if (eventData.email) subChannels.push('email');
+  if (phoneE164) subChannels.push('sms');
+  logKlaviyoLifecycle('subscription_send_start', { hasEmail: !!eventData.email, hasPhone: !!phoneE164, subscriptionsChannels: subChannels });
+
+  var subscriptionPromise = fetch(`https://a.klaviyo.com/client/subscriptions?company_id=${KLAVIYO_PUBLIC_API_KEY}`, {
+    method: 'POST',
+    headers: { accept: 'application/vnd.api+json', revision: KLAVIYO_API_REVISION, 'content-type': 'application/vnd.api+json' },
+    body: JSON.stringify(subscriptionPayload),
+    keepalive: true,
+  }).then(function(res) {
+    logKlaviyoLifecycle('subscription_send_done', { status: res.ok ? 'ok' : 'fail', statusCode: res.status });
+    if (!res.ok && typeof console !== 'undefined' && console.warn) {
+      console.warn('[Klaviyo] subscription failed', res.status);
+    }
+    return res;
+  }).catch(function() {
+    logKlaviyoLifecycle('subscription_send_done', { status: 'fail' });
+  });
 
   } else {
     profileOk = true; // already succeeded this submit attempt, allow event tracking
@@ -858,6 +902,7 @@ const getOrCreateVipAutoSkipScreen = () => {
   screen = document.createElement("div");
   screen.id = AUTO_SKIP_SCREEN_ID;
   screen.setAttribute("aria-live", "polite");
+  screen.setAttribute("data-testid", "autoskip-screen");
   screen.style.position = "fixed";
   screen.style.inset = "0";
   screen.style.zIndex = "9000";
@@ -868,6 +913,7 @@ const getOrCreateVipAutoSkipScreen = () => {
 
   const spinner = document.createElement("div");
   spinner.className = "loader";
+  spinner.setAttribute("data-testid", "autoskip-spinner");
   spinner.style.width = "48px";
   spinner.style.height = "48px";
   spinner.style.borderRadius = "50%";
@@ -1019,6 +1065,7 @@ const showToast = function(message, bg = "#333") {
     (() => {
       const div = document.createElement("div");
       div.id = "toast-container";
+      div.setAttribute("data-testid", "toast-container");
       div.style.position = "fixed";
       div.style.top = "10px";
       div.style.right = "10px";
@@ -1029,6 +1076,7 @@ const showToast = function(message, bg = "#333") {
 
   const toast = document.createElement("div");
   toast.className = "mytoast";
+  toast.setAttribute("data-testid", "toast");
   toast.textContent = message;
   toast.style.background = bg;
   toast.style.color = "#fff";
@@ -1528,7 +1576,7 @@ const processKlarnaUpsell = async () => {
         body: JSON.stringify({
           offers: offers.map((o) => JSON.stringify(o)),
           order_id: lastOrderId,
-          pageId: "eRIfIHrwvcApHH3DpPy6OrXnCzILGNwI52Gq4YW65k_mhJhz_zCVBMLU5XxcoEt3"
+          pageId: "Mh3XsNPAESbu70wywBoDDkpCBvQavLwy785YFYOeHF8Fo2WMjVaRQfCPdYLYYz7K"
         })
       }
     );
@@ -1608,7 +1656,7 @@ const processUpsell = async () => {
   }
   try {
     const orderData = JSON.parse(sessionStorage.getItem("orderData"));
-    orderData.pageId = "eRIfIHrwvcApHH3DpPy6OrXnCzILGNwI52Gq4YW65k_mhJhz_zCVBMLU5XxcoEt3";
+    orderData.pageId = "Mh3XsNPAESbu70wywBoDDkpCBvQavLwy785YFYOeHF8Fo2WMjVaRQfCPdYLYYz7K";
     const lastOrderId = sessionStorage.getItem("cms_oid");
     const stripePayment = JSON.parse(sessionStorage.getItem("stripePayment"));
     const isStripeTestOrder = stripePayment && !stripePayment.isLive;
@@ -1891,11 +1939,22 @@ const areAllProductsRecurring = () => {
 document.addEventListener("DOMContentLoaded", async () => {
   
 (function ensurePreloaderExists() {
-    if (document.querySelector('[data-preloader]')) return;
+    const existing = document.querySelector('[data-preloader]');
+    if (existing) {
+        if (!existing.getAttribute('data-testid')) {
+            existing.setAttribute('data-testid', 'preloader');
+        }
+        const spinner = existing.querySelector('.loader');
+        if (spinner && !spinner.getAttribute('data-testid')) {
+            spinner.setAttribute('data-testid', 'preloader-spinner');
+        }
+        return;
+    }
     const loaderOverlay = document.createElement('div');
     loaderOverlay.setAttribute('data-preloader', '');
+    loaderOverlay.setAttribute('data-testid', 'preloader');
     loaderOverlay.innerHTML = `
-        <div class="loader"></div>
+        <div class="loader" data-testid="preloader-spinner"></div>
         <p>${i18n.labels.processing}</p>
     `;
 
